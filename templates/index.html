@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PMOS Explainable AI Clinical Decision Support</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --surface: #ffffff;
+      --primary: #0f766e;
+      --primary-dark: #115e59;
+      --text: #0f172a;
+      --muted: #64748b;
+      --border: #e2e8f0;
+      --low: #059669;
+      --mod: #d97706;
+      --high: #dc2626;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: var(--bg); color: var(--text); }
+    header { background: #0f172a; color: #fff; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
+    header h1 { font-size: 1.1rem; font-weight: 600; }
+    .badge-sub { font-size: 0.78rem; color: #94a3b8; }
+    .container { max-width: 1220px; margin: 22px auto; padding: 0 16px; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1.25fr; gap: 20px; }
+    @media (max-width: 900px) { .grid-2 { grid-template-columns: 1fr; } }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 18px; }
+    .preset-row { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 14px; }
+    .btn { background: var(--primary); color: #fff; border: none; padding: 9px 14px; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 0.88rem; }
+    .btn:hover { background: var(--primary-dark); }
+    .btn-outline { background: #fff; color: var(--text); border: 1px solid var(--border); padding: 6px 10px; font-size: 0.8rem; }
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 4px; font-weight: 500; }
+    input { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.9rem; }
+    .tier-banner { border-radius: 8px; padding: 14px 16px; color: #fff; display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+    .tier-0 { background: var(--low); }
+    .tier-1 { background: var(--mod); }
+    .tier-2 { background: var(--high); }
+    .prob-bar { display: flex; height: 10px; border-radius: 99px; overflow: hidden; background: #e2e8f0; margin: 10px 0 16px; }
+    .shap-row { margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+    .shap-head { display: flex; justify-content: space-between; font-size: 0.86rem; margin-bottom: 5px; }
+    .bar-track { background: #f1f5f9; height: 8px; border-radius: 4px; overflow: hidden; }
+    .bar-fill-pos { background: #dc2626; height: 100%; }
+    .bar-fill-neg { background: #0d9488; height: 100%; }
+    .rec-list { margin-top: 12px; padding-left: 18px; font-size: 0.88rem; color: #334155; line-height: 1.5; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.86rem; margin-top: 10px; }
+    th, td { text-align: left; padding: 9px 8px; border-bottom: 1px solid var(--border); }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    const PRESETS = {
+      low: {
+        patient_label: "Baseline Wellness Check",
+        bmi: 21.8,
+        fasting_glucose: 86,
+        homa_ir: 1.3,
+        lh_fsh_ratio: 1.2,
+        free_testosterone: 1.5,
+        cycle_irregularity_days: 2,
+        triglycerides: 98,
+        hirsutism_score: 3
+      },
+      moderate: {
+        patient_label: "Follow-Up Symptom Check",
+        bmi: 27.6,
+        fasting_glucose: 104,
+        homa_ir: 2.7,
+        lh_fsh_ratio: 2.1,
+        free_testosterone: 2.8,
+        cycle_irregularity_days: 12,
+        triglycerides: 158,
+        hirsutism_score: 9
+      },
+      high: {
+        patient_label: "Pre-Clinical Endocrine Screening",
+        bmi: 33.4,
+        fasting_glucose: 124,
+        homa_ir: 4.5,
+        lh_fsh_ratio: 3.1,
+        free_testosterone: 4.2,
+        cycle_irregularity_days: 24,
+        triglycerides: 215,
+        hirsutism_score: 16
+      }
+    };
+
+    function App() {
+      const [form, setForm] = useState(PRESETS.moderate);
+      const [result, setResult] = useState(null);
+      const [history, setHistory] = useState([]);
+      const [loading, setLoading] = useState(false);
+
+      const loadHistory = async () => {
+        const res = await fetch('/api/history/');
+        const data = await res.json();
+        setHistory(data.records || []);
+      };
+
+      const runAssessment = async (payloadToSend = form) => {
+        setLoading(true);
+        try {
+          const res = await fetch('/api/assess/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payloadToSend)
+          });
+          const data = await res.json();
+          if (res.ok) {
+            setResult(data);
+            loadHistory();
+          }
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      useEffect(() => {
+        runAssessment(PRESETS.moderate);
+      }, []);
+
+      const applyPreset = (key) => {
+        setForm(PRESETS[key]);
+        runAssessment(PRESETS[key]);
+      };
+
+      const updateField = (key, value) => {
+        setForm(prev => ({ ...prev, [key]: value }));
+      };
+
+      const maxAbsShap = result
+        ? Math.max(...result.shap_explanations.map(s => Math.abs(s.shap_value)), 0.05)
+        : 0.2;
+
+      return (
+        <div>
+          <header>
+            <div>
+              <h1>PMOS Risk Assessment & Explainable AI (SHAP)</h1>
+              <div className="badge-sub">Decentralized Clinical Decision Support System for Polyendocrine Metabolic Ovarian Syndrome</div>
+            </div>
+            <span style={{ fontSize: '0.8rem', background: '#1e293b', padding: '5px 10px', borderRadius: 6 }}>
+              Pre-Clinical Screening Tool
+            </span>
+          </header>
+
+          <div className="container">
+            <div className="grid-2">
+              <div className="card">
+                <h3>1. Patient Biomarkers & Symptom Inputs</h3>
+                <div className="preset-row">
+                  <button type="button" className="btn btn-outline" onClick={() => applyPreset('low')}>Sample: Low Risk</button>
+                  <button type="button" className="btn btn-outline" onClick={() => applyPreset('moderate')}>Sample: Moderate Risk</button>
+                  <button type="button" className="btn btn-outline" onClick={() => applyPreset('high')}>Sample: High Risk</button>
+                </div>
+
+                <div style={{ marginBottom: 12 }}>
+                  <label>Check-In Label</label>
+                  <input type="text" value={form.patient_label} onChange={e => updateField('patient_label', e.target.value)} />
+                </div>
+
+                <div className="form-grid">
+                  <div>
+                    <label>BMI (kg/m²)</label>
+                    <input type="number" step="0.1" value={form.bmi} onChange={e => updateField('bmi', e.target.value)} />
+                  </div>
+                  <div>
+                    <label>Fasting Glucose (mg/dL)</label>
+                    <input type="number" step="1" value={form.fasting_glucose} onChange={e => updateField('fasting_glucose', e.target.value)} />
+                  </div>
+                  <div>
+                    <label>HOMA-IR Index</label>
+                    <input type="number" step="0.1" value={form.homa_ir} onChange={e => updateField('homa_ir', e.target.value)} />
+                  </div>
+                  <div>
+                    <label>LH / FSH Ratio</label>
+                    <input type="number" step="0.1" value={form.lh_fsh_ratio} onChange={e => updateField('lh_fsh_ratio', e.target.value)} />
+                  </div>
+                  <div>
+                    <label>Free Testosterone (ng/dL)</label>
+                    <input type="number" step="0.1" value={form.free_testosterone} onChange={e => updateField('free_testosterone', e.target.value)} />
+                  </div>
+                  <div>
+                    <label>Cycle Variance (days)</label>
+                    <input type="number" step="1" value={form.cycle_irregularity_days} onChange={e => updateField('cycle_irregularity_days', e.target.value)} />
+                  </div>
+                  <div>
+                    <label>Triglycerides (mg/dL)</label>
+                    <input type="number" step="1" value={form.triglycerides} onChange={e => updateField('triglycerides', e.target.value)} />
+                  </div>
+                  <div>
+                    <label>Hirsutism Score (0-36)</label>
+                    <input type="number" step="1" value={form.hirsutism_score} onChange={e => updateField('hirsutism_score', e.target.value)} />
+                  </div>
+                </div>
+
+                <button
+                  className="btn"
+                  style={{ width: '100%', marginTop: 16 }}
+                  disabled={loading}
+                  onClick={() => runAssessment(form)}
+                >
+                  {loading ? 'Running SHAP Feature Attribution...' : 'Run Multi-Level Risk Assessment'}
+                </button>
+              </div>
+
+              <div className="card">
+                <h3>2. Multi-Level Risk & SHAP Feature Attribution</h3>
+                {result && (
+                  <div style={{ marginTop: 12 }}>
+                    <div className={`tier-banner tier-${result.risk_tier}`}>
+                      <div>
+                        <div style={{ fontSize: '0.78rem', opacity: 0.9 }}>STRATIFIED ASSESSMENT</div>
+                        <div style={{ fontSize: '1.35rem', fontWeight: 700 }}>{result.risk_label}</div>
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        <div style={{ fontSize: '0.78rem', opacity: 0.9 }}>MODEL CONFIDENCE</div>
+                        <div style={{ fontSize: '1.2rem', fontWeight: 700 }}>{result.confidence_pct}%</div>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: 'var(--muted)' }}>
+                      <span>Low: {result.probabilities.low}%</span>
+                      <span>Moderate: {result.probabilities.moderate}%</span>
+                      <span>High: {result.probabilities.high}%</span>
+                    </div>
+                    <div className="prob-bar">
+                      <div style={{ width: `${result.probabilities.low}%`, background: 'var(--low)' }} />
+                      <div style={{ width: `${result.probabilities.moderate}%`, background: 'var(--mod)' }} />
+                      <div style={{ width: `${result.probabilities.high}%`, background: 'var(--high)' }} />
+                    </div>
+
+                    <div style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: 10 }}>
+                      SHAP Feature Impact Breakdown ({result.explainer_engine})
+                    </div>
+                    {result.shap_explanations.map(item => {
+                      const pct = Math.min(100, Math.round((Math.abs(item.shap_value) / maxAbsShap) * 100));
+                      const isPos = item.shap_value >= 0;
+                      return (
+                        <div key={item.key} className="shap-row">
+                          <div className="shap-head">
+                            <span>
+                              <strong>{item.label}</strong>: {item.patient_value} {item.unit}{' '}
+                              <span style={{ color: 'var(--muted)', fontSize: '0.78rem' }}>(Ref: {item.normal_range})</span>
+                            </span>
+                            <span style={{ color: isPos ? 'var(--high)' : 'var(--low)', fontWeight: 600 }}>
+                              {isPos ? `+${item.shap_value.toFixed(3)} (Risk Driver)` : `${item.shap_value.toFixed(3)} (Protective)`}
+                            </span>
+                          </div>
+                          <div className="bar-track">
+                            <div className={isPos ? 'bar-fill-pos' : 'bar-fill-neg'} style={{ width: `${pct}%` }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    <div style={{ marginTop: 14, background: '#f1f5f9', padding: 12, borderRadius: 8 }}>
+                      <strong style={{ fontSize: '0.88rem' }}>Proactive Lifestyle & Clinical Guidance:</strong>
+                      <ul className="rec-list">
+                        {result.recommendations.map((rec, i) => <li key={i}>{rec}</li>)}
+                      </ul>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="card" style={{ marginTop: 20 }}>
+              <h3>3. At-Home Symptom & Screening Log</h3>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Check-In</th>
+                    <th>Risk Tier</th>
+                    <th>BMI</th>
+                    <th>HOMA-IR</th>
+                    <th>LH/FSH</th>
+                    <th>Cycle Variance</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {history.map(rec => (
+                    <tr key={rec.id}>
+                      <td>{rec.timestamp}</td>
+                      <td>{rec.patient_label}</td>
+                      <td><strong>{rec.risk_label}</strong> ({rec.confidence_pct}%)</td>
+                      <td>{rec.inputs.bmi}</td>
+                      <td>{rec.inputs.homa_ir}</td>
+                      <td>{rec.inputs.lh_fsh_ratio}</td>
+                      <td>{rec.inputs.cycle_irregularity_days} days</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
